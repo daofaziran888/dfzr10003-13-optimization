@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
+from app.services import capacity
 from app.services.partition import PartitionService
 
 router = APIRouter(prefix="/api/partition", tags=["分区策略"])
@@ -14,6 +15,28 @@ service = PartitionService()
 
 LIST_FIELDS = ["配置编号", "表名称", "分区字段", "分区类型", "保留天数", "预建天数", "冷热分离", "存储路径"]
 STATUSES = ["草稿", "待审批", "已生效", "已停用"]
+
+
+@router.get("/capacity/overview")
+def capacity_overview(
+    as_of: str | None = Query(default=None, description="容量重算基准日，默认 2026-11-13"),
+    cycles: int = Query(default=capacity.DEFAULT_CYCLES, description="预测周期数，每周期 7 天"),
+) -> dict[str, Any]:
+    """分区页容量口径：与湖页读取同一个容量引擎出口，数字与不可迁移原因保持一致。"""
+    return capacity.capacity_overview(as_of=as_of, cycles=cycles)
+
+
+@router.get("/capacity/{config_code}")
+def strategy_capacity(
+    config_code: str,
+    as_of: str | None = Query(default=None),
+    cycles: int = capacity.DEFAULT_CYCLES,
+) -> dict[str, Any]:
+    """单条分区策略的预计占用、释放量、冷热收益与不可迁移原因。"""
+    report = capacity.strategy_capacity(config_code, as_of=as_of, cycles=cycles)
+    if report is None:
+        raise HTTPException(status_code=404, detail=f"分区策略 {config_code} 不存在")
+    return report
 
 
 @router.get("", response_model=PageResult[dict])

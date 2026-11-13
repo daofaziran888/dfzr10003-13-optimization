@@ -19,6 +19,7 @@ class Store:
         return sorted(self._tables)
 
     def rows(self, module: str) -> list[dict[str, Any]]:
+        # 容量治理的运行态表允许从空表起步，种子数据里不预置。
         return self._tables.setdefault(module, [])
 
     def find(self, module: str, entry_id: int) -> dict[str, Any] | None:

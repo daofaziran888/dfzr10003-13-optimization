@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
+import CapacityGovernancePanel from '@/components/CapacityGovernancePanel'
 import { request } from '@/api/client'
 
 const ENDPOINT = '/api/partition'
@@ -109,6 +110,8 @@ export default function PartitionView() {
           </article>
         ))}
       </div>
+
+      <CapacityGovernancePanel endpoint="/api/partition/capacity/overview" />
 
       <form className="filter-bar" onSubmit={(event) => { event.preventDefault(); void reload() }}>
         {filterFields.map((field) => (

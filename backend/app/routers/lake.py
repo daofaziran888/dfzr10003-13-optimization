@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
+from app.services import capacity, migration
 from app.services.lake import LakeService
 
 router = APIRouter(prefix="/api/lake", tags=["数据湖存储"])
@@ -14,6 +15,82 @@ service = LakeService()
 
 LIST_FIELDS = ["节点编号", "存储路径", "文件格式", "压缩方式", "总容量", "已用容量", "访问策略", "节点状态"]
 STATUSES = ["草稿", "运行中", "已暂停", "已归档"]
+
+
+@router.get("/capacity/overview")
+def capacity_overview(
+    as_of: str | None = Query(default=None, description="容量重算基准日，默认 2026-11-13"),
+    cycles: int = Query(default=capacity.DEFAULT_CYCLES, description="预测周期数，每周期 7 天"),
+) -> dict[str, Any]:
+    """湖存储取数链路统一出口：分区策略→分区实例→占用引用→湖节点容量与冷热收益。
+
+    分区页也读取同一份结果，保证两页预计占用、释放量、不可迁移原因完全一致。
+    """
+    return capacity.capacity_overview(as_of=as_of, cycles=cycles)
+
+
+@router.get("/capacity/{node_code}")
+def node_capacity(
+    node_code: str,
+    as_of: str | None = Query(default=None),
+    cycles: int = capacity.DEFAULT_CYCLES,
+) -> dict[str, Any]:
+    """单个湖节点的容量治理口径（含迁移顺序、容量预测、不可迁移原因）。"""
+    report = capacity.node_capacity(node_code, as_of=as_of, cycles=cycles)
+    if report is None:
+        raise HTTPException(status_code=404, detail=f"湖存储节点 {node_code} 不存在")
+    return report
+
+
+@router.post("/capacity/{node_code}/migration-plan")
+def submit_migration_plan(
+    node_code: str,
+    as_of: str | None = Query(default=None),
+    cycles: int = capacity.DEFAULT_CYCLES,
+) -> dict[str, Any]:
+    """提交迁移计划：同节点并发提交只允许一条执行记录落库，重复提交幂等返回同一条。"""
+    plan, message, status_code = migration.submit_plan(node_code, as_of=as_of, cycles=cycles)
+    if plan is None:
+        raise HTTPException(status_code=status_code, detail=message)
+    return {"ok": True, "message": message, "plan": plan}
+
+
+@router.get("/migration-plans")
+def list_migration_plans() -> dict[str, Any]:
+    """查看全部迁移执行记录。"""
+    return {"items": migration.list_plans()}
+
+
+@router.get("/migration-plans/{plan_no}")
+def get_migration_plan(plan_no: str) -> dict[str, Any]:
+    plan = migration.get_plan(plan_no)
+    if plan is None:
+        raise HTTPException(status_code=404, detail=f"迁移计划 {plan_no} 不存在")
+    return plan
+
+
+@router.post("/migration-plans/{plan_no}/execute")
+def execute_migration_plan(
+    plan_no: str,
+    payload: EntryPayload | None = None,
+) -> dict[str, Any]:
+    """执行迁移计划；可在 values.fail_partition 传入分区编号模拟该分区迁移失败。"""
+    fail_partition = None
+    if payload is not None:
+        fail_partition = str(payload.values.get("fail_partition") or "").strip() or None
+    plan, message, status_code = migration.execute_plan(plan_no, fail_partition=fail_partition)
+    if plan is None:
+        raise HTTPException(status_code=status_code, detail=message)
+    return {"ok": True, "message": message, "plan": plan}
+
+
+@router.post("/migration-plans/{plan_no}/retry")
+def retry_migration_plan(plan_no: str) -> dict[str, Any]:
+    """从失败分区断点重试，接着处理后续分区，已成功分区不重做。"""
+    plan, message, status_code = migration.retry_plan(plan_no)
+    if plan is None:
+        raise HTTPException(status_code=status_code, detail=message)
+    return {"ok": True, "message": message, "plan": plan}
 
 
 @router.get("", response_model=PageResult[dict])
